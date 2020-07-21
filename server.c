@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include "queue.h"
 
 #define PORT 8080
 #define QUEUE 10
@@ -47,13 +48,19 @@
 	} \
 }
 
+struct Accept_arg {
+	int server_fd;
+	struct Queue *queue;
+};
+
+// TODO: function to send files to clients int queue incrementally
 static inline int init_server_socket();
 static inline int count_char(char c, char *buffer);
 static inline char *get_file_extension(char *ptr);
 static inline int read_word(int fd, char *buffer);
 static inline int send_file(int fd, char *buffer, int buffer_size);
-static inline int resolve(int client_fd);
-static inline int accept_and_serve(int server_fd);
+static inline void resolve(int client_fd, FILE *file);
+static inline void *accept_thread(void *arg);
 
 int
 init_server_socket()
@@ -170,8 +177,8 @@ send_file(int fd, char *buffer, int buffer_size)
 	return 1;
 }
 
-int
-resolve(int client_fd)
+void
+resolve(int client_fd, FILE *file)
 {
 	int buffer_size = 256;
 	char buffer[buffer_size];
@@ -180,9 +187,6 @@ resolve(int client_fd)
 	// read method
 	memset(buffer, 0, buffer_size);
 	reset_size = read_word(client_fd, buffer);
-
-	printf("Recieving request from: %d\n", client_fd);
-	printf("Request method: %s\n", buffer);
 
 	if (!strcmp("GET", buffer)) {
 		// skip leading slash from stream
@@ -198,49 +202,62 @@ resolve(int client_fd)
 			strncpy(buffer, "index.html", 11);
 		}
 
-		if (!send_file(client_fd, buffer, buffer_size)) {
-			return 0;
+		file = fopen(buffer, "rb");
+		if (!file) {
+			printf("%s not found\n", buffer);
 		}
 	}
 
-	// read the remains of the response
-	for (;;) {
-		if (read(client_fd, buffer, buffer_size) < buffer_size) {
-			break;
-		}
-	}
-
-	printf("\n");
-	return 1;
 }
 
-int
-accept_and_serve(int server_fd)
+void *
+accept_thread(void *arg)
 {
-	struct sockaddr_in addr;
-	unsigned int addr_size = sizeof(addr);
-	int client_fd;
+	struct Accept_arg *accept_arg = (struct Accept_arg *)arg;
 
-	// accept and serve client
-	memset(&addr, 0, sizeof(addr));
-	assert((client_fd = accept(
-		server_fd, (struct sockaddr *)&addr, &addr_size)) >= 0);
-	resolve(client_fd);
+	for (;;) {
+		struct sockaddr_in addr;
+		unsigned int addr_size = sizeof(addr);
+		int client_fd;
 
-	close(client_fd);
-	return 0;
+		// accept connection from client
+		memset(&addr, 0, sizeof(addr));
+		assert((client_fd = accept(
+			accept_arg->server_fd,
+			(struct sockaddr *)&addr, &addr_size)) >= 0);
+		
+		FILE *file = NULL;
+		resolve(client_fd, file);
+
+		// add client to queue
+		accept_arg->queue = add(accept_arg->queue, file, client_fd);
+	}
 }
+
+
 
 int
 main()
 {
 	chroot("./");
 	int server_fd = init_server_socket();
+	struct Queue *queue = malloc(sizeof(struct Queue));
+	queue->file = NULL;
+	queue->next = NULL;
 
-	for (;;) {
-		accept_and_serve(server_fd);
-	}
+	struct Accept_arg accept_arg = {server_fd, queue};
+	accept_thread((void *)&accept_arg);
 
+	// unreachable
 	close(server_fd);
+
+	// clear up linked list
+	struct Queue *tmp = queue;
+	do {
+		free(tmp);
+		queue = queue->next;
+		tmp = queue;
+	} while (tmp);
+	
 	return 0;
 }

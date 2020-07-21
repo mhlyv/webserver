@@ -1,13 +1,16 @@
 NAME = webserver
 CFLAGS = -Wall -Wextra -pedantic -O3
 LDFLAGS = -Wall -Wextra -pedantic -O3
-SRC = server.c
+SRC = server.c queue.c
 OBJ = ${SRC:.c=.o}
 
 all: ${NAME}
 
 .c.o:
 	${CC} -c $< ${CFLAGS}
+
+server.c: queue.h
+queue.c: queue.h
 
 ${NAME}: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS} 
